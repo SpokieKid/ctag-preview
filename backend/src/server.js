@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const { OAuth2Client } = require('google-auth-library');
+const ctagRoutes = require('./api/ctagRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -12,9 +13,8 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // 启用 CORS
 app.use(cors({
-  origin: 'http://localhost:3000', // 允许前端域名
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // 允许的 HTTP 方法
-  allowedHeaders: ['Content-Type', 'Authorization'], // 允许的头部
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true,
 }));
 
 app.use(express.json());
@@ -47,7 +47,7 @@ app.post('/auth/google', async (req, res) => {
       audience: process.env.GOOGLE_CLIENT_ID,
     });
     const payload = ticket.getPayload();
-    const { email, name } = payload;
+    const { email, name, sub: googleId } = payload;
 
     // 检查用户是否已存在
     let { data: user, error } = await supabase
@@ -64,7 +64,7 @@ app.post('/auth/google', async (req, res) => {
       // 如果用户不存在，创建新用户
       const { data: newUser, error: insertError } = await supabase
         .from('users')
-        .insert({ email, name })
+        .insert({ email, name, google_id: googleId })
         .single();
 
       if (insertError) throw insertError;
@@ -74,27 +74,49 @@ app.post('/auth/google', async (req, res) => {
     // 获取用户的 CTags
     const { data: cTags, error: cTagsError } = await supabase
       .from('ctags')
-      .select('tag')  // 确保这里的列名是正确的
-      .eq('user_id', user.id);
+      .select('tag_id')
+      .eq('google_id', googleId);
 
     if (cTagsError) {
       console.error('Error fetching CTags:', cTagsError);
       throw cTagsError;
     }
 
-    // 如果 cTags 为 null 或 undefined，返回空数组
-    const userCTags = cTags ? cTags.map(ct => ct.tag) : [];
+    let userCTags = [];
+
+    // 如果用户没有 CTag，自动创建一个
+    if (!cTags || cTags.length === 0) {
+      const newTagId = `ctag_${Math.random().toString(36).substr(2, 9)}`;
+      const { data: newCTag, error: newCTagError } = await supabase
+        .from('ctags')
+        .insert([
+          {
+            tag_id: newTagId,
+            google_id: googleId,
+            web2_accounts: [email],
+            web3_wallets: []
+          }
+        ])
+        .single();
+
+      if (newCTagError) throw newCTagError;
+      userCTags = [newTagId];
+    } else {
+      userCTags = cTags.map(ct => ct.tag_id);
+    }
 
     res.json({
-      isRegistered: !!user,
+      isRegistered: true,
       cTags: userCTags,
-      user: { id: user.id, email: user.email, name: user.name }
+      user: { id: user.id, email: user.email, name: user.name, googleId }
     });
   } catch (error) {
     console.error('Error during Google authentication:', error);
-    res.status(500).json({ error: 'Authentication failed' });
+    res.status(500).json({ error: 'Authentication failed', details: error.message });
   }
 });
+
+app.use('/api/ctags', ctagRoutes);
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

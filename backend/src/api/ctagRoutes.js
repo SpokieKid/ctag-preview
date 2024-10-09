@@ -5,16 +5,23 @@ const supabase = require('../supabaseClient');
 // Register a new C-Tag
 router.post('/register', async (req, res) => {
   try {
-    const { tagId, web2Accounts, web3Wallets } = req.body;
-    console.log('Received data:', { tagId, web2Accounts, web3Wallets });
+    const { googleId, email } = req.body;
+    console.log('Received data:', { googleId, email });
+
+    if (!googleId || !email) {
+      return res.status(400).json({ message: 'Google ID and email are required' });
+    }
+
+    const tagId = `ctag_${Math.random().toString(36).substr(2, 9)}`;
 
     const { data, error } = await supabase
       .from('ctags')
       .insert([
         { 
-          tag_id: tagId, 
-          web2_accounts: web2Accounts, 
-          web3_wallets: web3Wallets 
+          tag_id: tagId,
+          google_id: googleId,
+          web2_accounts: [email],
+          web3_wallets: []
         }
       ]);
 
@@ -72,6 +79,11 @@ router.get('/check/:googleId', async (req, res) => {
 router.post('/auto-register', async (req, res) => {
   try {
     const { googleId, email } = req.body;
+    
+    if (!googleId || !email) {
+      return res.status(400).json({ message: 'Google ID and email are required' });
+    }
+
     const tagId = `ctag_${Math.random().toString(36).substr(2, 9)}`;
 
     const { data, error } = await supabase
@@ -89,27 +101,61 @@ router.post('/auto-register', async (req, res) => {
 
     res.status(201).json({ message: 'CTag auto-registered successfully', cTag: data[0] });
   } catch (error) {
+    console.error('Error in /auto-register:', error);
     res.status(400).json({ message: 'Error auto-registering CTag', error: error.message });
   }
 });
 
-// 添加新的路由来获取用户的 CTag 信息
+// 检查获取用户 cTags 的路由
 router.get('/user-ctags/:userId', async (req, res) => {
   const { userId } = req.params;
-
   try {
     const { data, error } = await supabase
-      .from('user_ctags')
-      .select('ctag')
-      .eq('user_id', userId);
+      .from('ctags')
+      .select('tag_id')
+      .eq('google_id', userId);
 
     if (error) throw error;
 
-    const ctags = data.map(item => item.ctag);
-    res.json({ ctags });
+    if (!data) {
+      return res.json([]);
+    }
+
+    res.json(data.map(item => item.tag_id));
   } catch (error) {
-    console.error('Error fetching user CTags:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error fetching user cTags:', error);
+    res.status(500).json({ error: 'Failed to fetch user cTags', details: error.message });
+  }
+});
+
+// 自动创建名为 "ns" 的 CTag
+router.post('/auto-create-ns', async (req, res) => {
+  try {
+    const { googleId, email } = req.body;
+    
+    if (!googleId || !email) {
+      return res.status(400).json({ message: 'Google ID and email are required' });
+    }
+
+    const tagId = 'ns';
+
+    const { data, error } = await supabase
+      .from('ctags')
+      .insert([
+        { 
+          tag_id: tagId, 
+          google_id: googleId,
+          web2_accounts: [email],
+          web3_wallets: []
+        }
+      ]);
+
+    if (error) throw error;
+
+    res.status(201).json({ message: 'NS CTag created successfully', cTag: data[0] });
+  } catch (error) {
+    console.error('Error in /auto-create-ns:', error);
+    res.status(400).json({ message: 'Error creating NS CTag', error: error.message });
   }
 });
 
